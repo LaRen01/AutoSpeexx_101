@@ -2,9 +2,10 @@
 // @name         AutoSpeexx
 // @namespace    http://tampermonkey.net/
 // @version      1.0
-// @description  自动完成 Speexx 平台视频播放、练习答题、发音练习跳过、跨页自动续跑，可设定参数模拟人工做题时长。
+// @description  ทำงานอัตโนมัติบนแพลตฟอร์ม Speexx ทั้งเล่นวิดีโอ, ทำแบบฝึกหัด, ข้ามแบบฝึกหัดการออกเสียง, ข้ามหน้าอัตโนมัติ พร้อมตั้งค่าเวลาจำลองการทำโจทย์เสมือนจริงได้
 // @author       0x9c5
 // @match        https://portal.speexx.cn/articles/*
+// @match        https://portal.speexx.com/articles/*
 // @grant        GM_addStyle
 // @run-at       document-start
 // @license      GPL-3.0-only
@@ -17,20 +18,20 @@
 
 	// -------------------------- 1. 核心配置 --------------------------
 	const MIN_CONFIG = {
-		MIN_TOTAL_TIME: 30000, // 单题最短时间最小值（30秒）
-		MIN_RANDOM_DELAY: 1000 // 随机延迟最小值（1000ms）
+		MIN_TOTAL_TIME: 30000, // ค่าต่ำสุดของเวลารวมต่อข้อ (30 วินาที)
+		MIN_RANDOM_DELAY: 1000 // ค่าต่ำสุดของความหน่วงสุ่ม (1000ms)
 	};
 
 	const DEFAULT_CONFIG = {
         // 基本配置
-		MIN_TOTAL_TIME: 30000, // 单题最短完成时间（默认30秒）
-        PRON_WAIT: false, // 是否在发音页面增加额外停留时间
+		MIN_TOTAL_TIME: 30000, // เวลาขั้นต่ำในการทำเสร็จต่อข้อ (ค่าเริ่มต้น 30 วินาที)
+        PRON_WAIT: false, // เพิ่มเวลาพักในหน้าออกเสียงหรือไม่
 		// 高级配置
-		SOLVE_DELAY: 10000, // 显示答案后延迟
-		SUBMIT_DELAY: 10000, // 提交后延迟
-		NEXT_LOAD_DELAY: 3000, // Next加载延迟
-		SCORE_CHECK_DELAY: 2000, // 成绩检测延迟
-        MAX_RANDOM_DELAY: 5000, // 随机延迟最大值（默认5秒）
+		SOLVE_DELAY: 10000, // หน่วงเวลาก่อนแสดงเฉลย
+		SUBMIT_DELAY: 10000, // หน่วงเวลาหลังกดส่ง
+		NEXT_LOAD_DELAY: 3000, // หน่วงเวลาโหลดหน้าถัดไป
+		SCORE_CHECK_DELAY: 2000, // หน่วงเวลาตรวจสอบคะแนน
+        MAX_RANDOM_DELAY: 5000, // ค่าสูงสุดของความหน่วงสุ่ม (ค่าเริ่มต้น 5 วินาที)
 	};
 	let CONFIG = {
 		...DEFAULT_CONFIG
@@ -40,7 +41,7 @@
 	GM_addStyle(`
         /* 主面板 */
         .autospeexx-panel {
-            max-height: 650px; /* 或者 70vh ? */
+            max-height: 650px;
             display: flex;
             flex-direction: column;
             overflow: hidden;
@@ -178,7 +179,6 @@
             border-bottom: 1px solid #eee;
         }
 
-        /*  优化滚动条样式 */
         .autospeexx-scroll-container::-webkit-scrollbar {
             width: 6px;
         }
@@ -186,29 +186,21 @@
             background: #ddd;
             border-radius: 10px;
         }
-        .autospeexx-scroll-container::-webkit-scrollbar-thumb:hover {
-            background: #ccc;
-        }
 
-        /* advanced-settings 标题样式 */
-        /* 隐藏所有页面可能自带的默认箭头 */
         .autospeexx-advanced-settings summary {
             list-style: none !important;
             outline: none !important;
             cursor: pointer;
             position: relative;
-            padding-left: 20px !important; /* 为自定义箭头留位 */
+            padding-left: 20px !important;
             user-select: none;
             color: #666;
             font-size: 13px;
             margin: 10px 0;
         }
-
         .autospeexx-advanced-settings summary::-webkit-details-marker {
-            display: none !important; /* Chrome/Safari */
+            display: none !important;
         }
-
-        /* 伪元素绘制箭头 */
         .autospeexx-advanced-settings summary::before {
             content: '▶';
             position: absolute;
@@ -219,8 +211,6 @@
             color: #dc3545;
             transition: transform 0.2s ease;
         }
-
-        /* 展开时，让箭头旋转 90 度变成向下 */
         .autospeexx-advanced-settings[open] summary::before {
             transform: translateY(-50%) rotate(90deg);
         }
@@ -230,7 +220,7 @@
         .autospeexx-tip { font-size: 12px; color:rgb(128, 128, 128) !important; margin: 5px 0; }
         .autospeexx-log {
             flex-shrink: 0;
-            height: 160px;  /* 100px → 160px */
+            height: 160px;
             border: 1px solid #eee;
             padding: 8px;
             margin-top: 10px;
@@ -240,7 +230,6 @@
             white-space: pre-wrap;
         }
 
-        /* 最小化 */
         .autospeexx-panel.minimized { display: none !important; }
     `);
 
@@ -254,7 +243,6 @@
 	const CONFIG_STORAGE_KEY = 'AutoSpeexxConfig';
 
 	// -------------------------- 4. 工具函数 --------------------------
-	// 打印日志显示运行状态
 	function addLog(msg) {
 		const time = new Date().toLocaleTimeString();
 		const logItem = `[${time}] ${msg}`;
@@ -272,38 +260,33 @@
 		if (savedConfig) {
 			try {
 				const parsed = JSON.parse(savedConfig);
-				// 基本配置
 				CONFIG.MIN_TOTAL_TIME = Math.max(parsed.MIN_TOTAL_TIME || DEFAULT_CONFIG.MIN_TOTAL_TIME, MIN_CONFIG.MIN_TOTAL_TIME);
                 if (typeof parsed.PRON_WAIT === 'boolean') {CONFIG.PRON_WAIT = parsed.PRON_WAIT;} else {CONFIG.PRON_WAIT = DEFAULT_CONFIG.PRON_WAIT;}
 
-				// 高级配置
 				CONFIG.SOLVE_DELAY = (typeof parsed.SOLVE_DELAY === 'number' && parsed.SOLVE_DELAY > 0) ? parsed.SOLVE_DELAY : DEFAULT_CONFIG.SOLVE_DELAY;
 				CONFIG.SUBMIT_DELAY = (typeof parsed.SUBMIT_DELAY === 'number' && parsed.SUBMIT_DELAY > 0) ? parsed.SUBMIT_DELAY : DEFAULT_CONFIG.SUBMIT_DELAY;
 				CONFIG.NEXT_LOAD_DELAY = (typeof parsed.NEXT_LOAD_DELAY === 'number' && parsed.NEXT_LOAD_DELAY > 0) ? parsed.NEXT_LOAD_DELAY : DEFAULT_CONFIG.NEXT_LOAD_DELAY;
 				CONFIG.SCORE_CHECK_DELAY = (typeof parsed.SCORE_CHECK_DELAY === 'number' && parsed.SCORE_CHECK_DELAY > 0) ? parsed.SCORE_CHECK_DELAY : DEFAULT_CONFIG.SCORE_CHECK_DELAY;
                 CONFIG.MAX_RANDOM_DELAY = Math.max(parsed.MAX_RANDOM_DELAY || DEFAULT_CONFIG.MAX_RANDOM_DELAY, MIN_CONFIG.MIN_RANDOM_DELAY);
 
-				addLog('✅ 配置加载完成');
+				addLog('✅ โหลดการตั้งค่าสำเร็จ');
 			} catch (e) {
-				addLog(`❌ 配置加载失败：${e.message}`);
+				addLog(`❌ โหลดการตั้งค่าไม่สำเร็จ: ${e.message}`);
 			}
 		}
 		updateConfigInputs();
 	}
 
 	function saveConfig() {
-		// 基本配置
 		const minTotalTime = Math.max(Number(document.getElementById('minTotalTimeInput').value) || DEFAULT_CONFIG.MIN_TOTAL_TIME, MIN_CONFIG.MIN_TOTAL_TIME);
         const pronWait = document.getElementById('pronWaitInput') ? document.getElementById('pronWaitInput').checked : DEFAULT_CONFIG.PRON_WAIT;
 
-		// 高级配置
 		const solveDelay = (Number(document.getElementById('solveDelayInput').value) > 0) ? Number(document.getElementById('solveDelayInput').value) : DEFAULT_CONFIG.SOLVE_DELAY;
 		const submitDelay = (Number(document.getElementById('submitDelayInput').value) > 0) ? Number(document.getElementById('submitDelayInput').value) : DEFAULT_CONFIG.SUBMIT_DELAY;
 		const nextLoadDelay = (Number(document.getElementById('nextLoadDelayInput').value) > 0) ? Number(document.getElementById('nextLoadDelayInput').value) : DEFAULT_CONFIG.NEXT_LOAD_DELAY;
 		const scoreCheckDelay = (Number(document.getElementById('scoreCheckDelayInput').value) > 0) ? Number(document.getElementById('scoreCheckDelayInput').value) : DEFAULT_CONFIG.SCORE_CHECK_DELAY;
         const maxRandomDelay = Math.max(Number(document.getElementById('maxRandomDelayInput').value) || DEFAULT_CONFIG.MAX_RANDOM_DELAY, MIN_CONFIG.MIN_RANDOM_DELAY);
 
-		// 更新配置
 		CONFIG.MIN_TOTAL_TIME = minTotalTime;
         CONFIG.PRON_WAIT = pronWait;
 		CONFIG.SOLVE_DELAY = solveDelay;
@@ -312,7 +295,6 @@
 		CONFIG.SCORE_CHECK_DELAY = scoreCheckDelay;
         CONFIG.MAX_RANDOM_DELAY = maxRandomDelay;
 
-		// 保存到本地存储
 		localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify({
 			MIN_TOTAL_TIME: CONFIG.MIN_TOTAL_TIME,
             PRON_WAIT: CONFIG.PRON_WAIT,
@@ -324,13 +306,12 @@
 		}));
 
 		updateConfigInputs();
-		addLog(`⚙️ 配置保存成功：
-基本配置：单题最短${CONFIG.MIN_TOTAL_TIME/1000}秒完成，最大随机延迟${CONFIG.MAX_RANDOM_DELAY/1000}秒，发音页面更长停留 [${CONFIG.PRON_WAIT ? '开启' : '关闭'}]
-高级配置：显示答案延迟${CONFIG.SOLVE_DELAY/1000}秒，提交延迟${CONFIG.SUBMIT_DELAY/1000}秒，跨页加载预留延迟${CONFIG.NEXT_LOAD_DELAY/1000}秒，成绩检测延迟${CONFIG.SCORE_CHECK_DELAY/1000}秒`);
+		addLog(`⚙️ บันทึกการตั้งค่าสำเร็จ:
+ตั้งค่าพื้นฐาน: เวลาขั้นต่ำต่อข้อ ${CONFIG.MIN_TOTAL_TIME/1000} วินาที, หน่วงสุ่มสูงสุด ${CONFIG.MAX_RANDOM_DELAY/1000} วินาที, พักหน้าออกเสียงนานขึ้น [${CONFIG.PRON_WAIT ? 'เปิด' : 'ปิด'}]
+ตั้งค่าขั้นสูง: หน่วงแสดงเฉลย ${CONFIG.SOLVE_DELAY/1000} วินาที, หน่วงส่ง ${CONFIG.SUBMIT_DELAY/1000} วินาที, หน่วงโหลดข้ามหน้า ${CONFIG.NEXT_LOAD_DELAY/1000} วินาที, หน่วงตรวจคะแนน ${CONFIG.SCORE_CHECK_DELAY/1000} วินาที`);
 	}
 
 	function resetConfig() {
-		// 重置为默认值（含高级配置）
 		CONFIG.MIN_TOTAL_TIME = DEFAULT_CONFIG.MIN_TOTAL_TIME;
         CONFIG.PRON_WAIT = DEFAULT_CONFIG.PRON_WAIT;
 		CONFIG.SOLVE_DELAY = DEFAULT_CONFIG.SOLVE_DELAY;
@@ -350,18 +331,16 @@
 		}));
 
 		updateConfigInputs();
-		addLog('⚙️ 配置重置为默认值');
+		addLog('⚙️ รีเซ็ตการตั้งค่าเป็นค่าเริ่มต้นแล้ว');
 	}
 
 	function updateConfigInputs() {
-		// 基本配置输入框更新
 		const minTotalTimeInput = document.getElementById('minTotalTimeInput');
         const pronWaitInput = document.getElementById('pronWaitInput');
 
 		if (minTotalTimeInput) minTotalTimeInput.value = CONFIG.MIN_TOTAL_TIME;
         pronWaitInput.checked = !!CONFIG.PRON_WAIT;
 
-		// 高级配置输入框更新
 		const solveDelayInput = document.getElementById('solveDelayInput');
 		const submitDelayInput = document.getElementById('submitDelayInput');
 		const nextLoadDelayInput = document.getElementById('nextLoadDelayInput');
@@ -375,22 +354,18 @@
         if (maxRandomDelayInput) maxRandomDelayInput.value = CONFIG.MAX_RANDOM_DELAY;
 	}
 
-	// 生成随机延迟（1000ms ~ 最大值）
 	function getRandomDelay() {
 		return Math.floor(Math.random() * (CONFIG.MAX_RANDOM_DELAY - MIN_CONFIG.MIN_RANDOM_DELAY)) + MIN_CONFIG.MIN_RANDOM_DELAY;
 	}
 
-	// 检测结算界面（.graphic-stats）
 	function isResultPage() {
 		return !!document.querySelector('.graphic-stats');
 	}
 
-	// 动态检测页面类型（/magazine 和 /vocabulary-trainer 统一归为 unknown）
 	function detectPageType() {
 		const url = window.location.href;
 		let type = 'unknown';
 
-		// 页面类型判断
 		if (document.querySelector('.graphic-stats')) {
 			type = 'result';
 		} else if (document.querySelector('.microphone-pulse') || url.includes('/pronunciation')) {
@@ -405,43 +380,37 @@
 			type = 'unknown';
 		}
 
-		// 更新页面类型和日志（保留）
 		if (type !== currentPageType) {
-			addLog(`🔄 页面类型：${currentPageType} → ${type}`);
+			addLog(`🔄 ชนิดของหน้า: ${currentPageType} → ${type}`);
 			currentPageType = type;
 			const pageTypeDoms = document.querySelectorAll('.autospeexx-page-type');
 			pageTypeDoms.forEach(dom => {
-				dom.textContent = `当前页面：${type}`;
+				dom.textContent = `หน้าปัจจุบัน: ${type}`;
 			});
 		}
 		return type;
 	}
 
-	// 检测题目加载 / 下一题 / 成绩显示
 	function isExerciseLoaded() {
 		return !!document.querySelector('.exercise-content') || !!document.querySelector('.question');
 	}
 
-	// 是否存在 Next 按钮
 	function hasNextQuestion() {
 		const nextBtn = document.querySelector('.next');
 		return nextBtn && !nextBtn.disabled;
 	}
 
-	// 检测显示成绩的 <span> 元素是否存在（无分数校验）
 	function isScoreDisplayed() {
 		return !!document.querySelector('span[class*="result"]') || !!document.querySelector('span[class*="result-badge-container"]') || !!document.querySelector('.next:not(:disabled)');
 	}
 
-	// 初始化练习组件
 	function initExerciseComponent() {
 		try {
 			if (!window.entryp) {
 				window.entryp = {
 					trigger: function(action) {
-						// 视频页跳过提交触发，避免报错
 						if (currentPageType === 'video' && action === 'correct') {
-							addLog('⚠️ 视频页跳过correction触发（避免JS报错）');
+							addLog('⚠️ ข้ามการทริกเกอร์ correction ในหน้าวิดีโอ (ป้องกัน JS พลาด)');
 							return;
 						}
 						const btn = document.querySelector(`.btn-${action}`) || document.querySelector(`[data-action="${action}"]`);
@@ -450,10 +419,6 @@
 				};
 			}
 
-			// --- BEGIN: Backbone Interception Logic ---
-            // Part of this section is derived from speexx-auto by BeautyyuYanli
-            // Licensed under GPL-3.0. Source: https://github.com/NAOSI-DLUT/speexx-auto
-            // ---
 			CourseWare.CourseExercises.CourseExercisesControlsView = Backbone.Speexx.HandlebarsView.extend({
 				templateName: "cw-language-course-controls",
 				className: "exercise-controls",
@@ -521,11 +486,10 @@
 					}
 				}
 			});
-            // --- END: Backbone Interception Logic ---
 
-			addLog('✅ 练习组件初始化完成');
+			addLog('✅ เริ่มต้นคอมโพเนนต์แบบฝึกหัดสำเร็จ');
 		} catch (e) {
-			addLog(`⚠️ 组件初始化异常：${e.message}`);
+			addLog(`⚠️ เกิดข้อผิดพลาดในการเริ่มต้นคอมโพเนนต์: ${e.message}`);
 		}
 	}
 
@@ -535,137 +499,113 @@
 
 		const pageType = detectPageType();
 
-		// 页面类型分别处理（新增 pronunciation）
 		switch (pageType) {
 			case 'result':
-				// 结算页面：随机延迟后点击 Next
 				processResultPage();
 				break;
 			case 'pronunciation':
-				// 发音页面：一路 Next（每次 Next 前随机延迟）
 				processPronunciationPage();
 				break;
 			case 'video':
-				// 视频页面：播放视频逻辑
 				processVideoPage();
 				break;
 			case 'exercise':
-				// 练习页面：自动做题逻辑
 				processExercisePage();
 				break;
-				// home/unknown 页面停止自动任务
 			case 'home':
 			case 'unknown':
-				addLog('❌ 当前是主页/其他页面，停止自动任务');
+				addLog('❌ อยู่ในหน้าแรกหรือหน้าอื่น, หยุดทำงานอัตโนมัติ');
 				stopTask();
 				break;
 		}
 	}
 
 	function processResultPage() {
-		addLog('✅ 检测到结算界面，随机延迟后触发Next');
-		// 生成随机延迟
+		addLog('✅ ตรวจพบหน้าสรุปผล, กำลังหน่วงเวลาแบบสุ่มก่อนกด Next');
 		const randomDelay = getRandomDelay();
-		addLog(`⌛ 结算页随机延迟${randomDelay/1000}秒`);
+		addLog(`⌛ หน่วงเวลาในหน้าสรุปผล ${randomDelay/1000} วินาที`);
 
 		setTimeout(() => {
 			if (!isRunning) return;
 
-			// 点击 Next 按钮
 			const nextBtn = document.querySelector('.next');
 			if (nextBtn && !nextBtn.disabled) {
 				nextBtn.click();
-				addLog('✅ 结算页触发Next，进入下一页');
+				addLog('✅ กด Next ในหน้าสรุปผลแล้ว, ไปยังหน้าถัดไป');
 
-				// 防止第一题空题 
-				// 清除所有残留定时器，防止提前执行逻辑
 				if (currentTaskTimer) {
 					clearTimeout(currentTaskTimer);
 					currentTaskTimer = null;
 				}
-				// 强制等待页面加载（延长等待逻辑）
-				addLog(`⌛ 强制等待${CONFIG.NEXT_LOAD_DELAY/1000}秒，等待新页面完全加载`);
+				addLog(`⌛ รอโหลดหน้าใหม่ ${CONFIG.NEXT_LOAD_DELAY/1000} วินาที`);
 				currentTaskTimer = setTimeout(() => {
 					if (isRunning) {
-						processCurrentPage(); // 等待结束后再检测页面
+						processCurrentPage();
 					}
 				}, CONFIG.NEXT_LOAD_DELAY);
 			} else {
-				addLog('⚠️ 结算页未找到可用的Next按钮，任务完成');
+				addLog('⚠️ ไม่พบปุ่ม Next ที่ใช้งานได้ในหน้าสรุปผล, งานเสร็จสิ้น');
 				stopTask();
 			}
 		}, randomDelay);
 	}
 
-	// 处理发音页面（仅需一路 Next，每次触发前随机延迟）
 	function processPronunciationPage() {
-		addLog('✅ 检测到发音练习页面，启用自动跳过逻辑');
+		addLog('✅ ตรวจพบหน้าฝึกออกเสียง, เปิดใช้งานโหมดข้ามอัตโนมัติ');
 
-		// 将原来的 stopTask() 改为延迟重试
 		if (!hasNextQuestion()) {
-			addLog('⌛ 发音页面Next按钮未就绪，2秒后重试...');
+			addLog('⌛ ปุ่ม Next ของหน้าออกเสียงยังไม่พร้อม, ลองใหม่ใน 2 วินาที...');
 			currentTaskTimer = setTimeout(processPronunciationPage, 2000);
 			return;
 		}
 
-		// 生成随机延迟
 		const randomDelay = getRandomDelay();
-		addLog(`⌛ 延迟${randomDelay * (3 ** CONFIG.PRON_WAIT)/1000}秒后点击Next`);
+		addLog(`⌛ หน่วงเวลา ${randomDelay * (3 ** CONFIG.PRON_WAIT)/1000} วินาทีก่อนกด Next`);
 
 		setTimeout(() => {
 			if (!isRunning) return;
 			const nextBtn = document.querySelector('.next');
 			if (nextBtn && !nextBtn.disabled) {
 				nextBtn.click();
-				addLog('✅ 触发Next，进入下一页');
+				addLog('✅ กด Next สำเร็จ, ไปยังหน้าถัดไป');
 				setTimeout(processCurrentPage, CONFIG.NEXT_LOAD_DELAY);
 			} else {
-				addLog('⚠️ 发音页面Next按钮不可用，任务停止');
+				addLog('⚠️ ปุ่ม Next ในหน้าออกเสียงไม่พร้อมใช้งาน, หยุดทำงาน');
 				stopTask();
 			}
 		}, randomDelay * (3 ** CONFIG.PRON_WAIT));
 	}
 
-	// 处理视频页面
 	function processVideoPage() {
-		addLog('✅ 检测到视频页面，启用视频播放逻辑');
+		addLog('✅ ตรวจพบหน้าวิดีโอ, เริ่มต้นระบบเล่นวิดีโออัตโนมัติ');
 
-		// 播放视频
 		const playBtn = document.querySelector('.vjs-big-play-button') || document.querySelector('.video-play-btn');
 		if (playBtn) {
 			playBtn.click();
-			addLog('▶️ 播放视频');
+			addLog('▶️ กำลังเล่นวิดีโอ');
 		} else {
-			addLog('⚠️ 未找到播放按钮，假设视频已播放');
+			addLog('⚠️ ไม่טיปุ่มเล่น, สมมติว่าวิดีโอกำลังเล่นอยู่');
 		}
 
-		// 检测视频播放完成
 		const checkVideoComplete = () => {
 			if (!isRunning) return;
 
-			// 检测视频完成状态
 			let isComplete = false;
 			const videoElement = document.querySelector('video');
 			const timeDisplay = document.querySelector('.vjs-remaining-time-display');
 
-			// 1：检测剩余时间
 			if (timeDisplay && timeDisplay.textContent.trim() === '0:00') {
 				isComplete = true;
-			}
-			// 2：检测 .ended
-			else if (videoElement && videoElement.ended) {
+			} else if (videoElement && videoElement.ended) {
 				isComplete = true;
-			}
-			// 3：检测视频完成标识
-			else if (document.querySelector('.video-complete') || document.querySelector('.lesson-complete')) {
+			} else if (document.querySelector('.video-complete') || document.querySelector('.lesson-complete')) {
 				isComplete = true;
 			}
 
 			if (isComplete) {
-				addLog('✅ 视频播放完成');
-				// 随机延迟后点击 Next
+				addLog('✅ วิดีโอเล่นจบแล้ว');
 				const randomDelay = getRandomDelay();
-				addLog(`✅ 视频完成后随机延迟${randomDelay/1000}秒`);
+				addLog(`✅ หน่วงเวลาหลังวิดีโอจบ ${randomDelay/1000} วินาที`);
 
 				setTimeout(() => {
 					if (!isRunning) return;
@@ -673,89 +613,75 @@
 					const nextBtn = document.querySelector('.next');
 					if (nextBtn && !nextBtn.disabled) {
 						nextBtn.click();
-						addLog('✅ 视频页点击Next，进入下一页');
+						addLog('✅ กด Next ในหน้าวิดีโอแล้ว, ไปยังหน้าถัดไป');
 						setTimeout(processCurrentPage, CONFIG.NEXT_LOAD_DELAY);
 					} else {
-						addLog('⚠️ 视频页未找到可用的Next按钮，任务结束');
+						addLog('⚠️ ไม่พบปุ่ม Next ในหน้าวิดีโอ, สิ้นสุดภารกิจ');
 						stopTask();
 					}
 				}, randomDelay);
 			} else {
-				// 1 秒后再次检测
 				currentTaskTimer = setTimeout(checkVideoComplete, 1000);
 			}
 		};
 
-		// 启动视频完成检测
 		checkVideoComplete();
 	}
 
-	// 处理练习页面（自动做题逻辑）
 	function processExercisePage() {
-		// 再次检测结算界面
 		if (isResultPage()) {
 			processResultPage();
 			return;
 		}
 
-		// --- 新增：针对存在 Start 按钮的特殊题型的处理 ---
 		const startBtn = document.querySelector('.btn-primary.start-exercise');
 		if (startBtn) {
-			addLog('🔎 检测到前置 Start 按钮，尝试激活练习...');
+			addLog('🔎 พบปุ่ม Start, กำลังพยายามเริ่มแบบฝึกหัด...');
 			startBtn.click();
-			// 点击后等待 1.5 秒让题目加载，然后重新进入当前页逻辑
 			currentTaskTimer = setTimeout(processCurrentPage, 1500);
 			return;
 		}
-		// -----------------------------------------------
 
-		// 等待题目加载 + 强制初始化
 		if (!isExerciseLoaded()) {
-			addLog('⚠️ 题目未加载，3秒后重试');
+			addLog('⚠️ แบบฝึกหัดยังไม่โหลด, ลองใหม่ใน 3 วินาที');
 			initExerciseComponent();
 			currentTaskTimer = setTimeout(processExercisePage, 3000);
 			return;
 		}
 
-		// 记录开始时间
 		const startTime = Date.now();
-		addLog(`✅ 开始处理题目（最短${CONFIG.MIN_TOTAL_TIME/1000}秒）`);
+		addLog(`✅ เริ่มทำแบบฝึกหัด (เวลาขั้นต่ำ ${CONFIG.MIN_TOTAL_TIME/1000} วินาที)`);
 
-		// 1. 显示答案
 		if (window.entryp) {
 			window.entryp.trigger("solve");
-			addLog(`✅ 显示答案，等待${CONFIG.SOLVE_DELAY/1000}秒`);
+			addLog(`✅ แสดงเฉลยแล้ว, รอ ${CONFIG.SOLVE_DELAY/1000} วินาที`);
 		}
 
-		// 2. 延迟提交
 		setTimeout(() => {
 			if (!isRunning) return;
 
 			if (window.entryp) {
 				window.entryp.trigger("correct");
-				addLog(`✅ 提交答案，等待${CONFIG.SUBMIT_DELAY/1000}秒`);
+				addLog(`✅ ส่งคำตอบแล้ว, รอ ${CONFIG.SUBMIT_DELAY/1000} วินาที`);
 			}
 
-			// 3. 成绩检测 + 计算总耗时
 			setTimeout(() => {
 				if (!isRunning) return;
 
-				addLog('✅ 检测成绩显示');
+				addLog('✅ กำลังตรวจสอบการแสดงผลคะแนน');
 				if (!isScoreDisplayed()) {
-					addLog(`⚠️ 未检测到成绩显示，等待${CONFIG.SCORE_CHECK_DELAY/1000}秒`);
+					addLog(`⚠️ ไม่พบการแสดงคะแนน, รอเพิ่มอีก ${CONFIG.SCORE_CHECK_DELAY/1000} วินาที`);
 					setTimeout(proceedToNext, CONFIG.SCORE_CHECK_DELAY);
 				} else {
 					proceedToNext();
 				}
 
 				function proceedToNext() {
-					// 计算已耗时
 					const elapsedTime = Date.now() - startTime;
-					// 补充延迟仅补到最短时间
 					const needWaitTime = Math.max(0, CONFIG.MIN_TOTAL_TIME - elapsedTime);
 
 					if (needWaitTime > 0) {
-						addLog(`⌛ 补充延迟${needWaitTime/1000}秒（补至单题最短时间）`);
+						addLog(`⌛ รอเวลาเพิ่มเติม ${needWaitTime/1000} วินาที (เพื่อให้ครบเวลาขั้นต่ำต่อข้อ)`);
 						setTimeout(() => {
 							addRandomDelayThenNext();
 						}, needWaitTime);
@@ -764,10 +690,9 @@
 					}
 				}
 
-				// 独立的随机延迟步骤
 				function addRandomDelayThenNext() {
 					const randomDelay = getRandomDelay();
-					addLog(`⌛ 随机延迟${randomDelay/1000}秒（独立）`);
+					addLog(`⌛ หน่วงเวลาแบบสุ่ม ${randomDelay/1000} วินาที`);
 					setTimeout(() => {
 						clickNext();
 					}, randomDelay);
@@ -776,7 +701,6 @@
 				function clickNext() {
 					if (!isRunning) return;
 
-					// 再次检测结算界面
 					if (isResultPage()) {
 						processResultPage();
 						return;
@@ -785,10 +709,10 @@
 					if (hasNextQuestion()) {
 						const nextBtn = document.querySelector('.next');
 						nextBtn.click();
-						addLog('✅ 练习页点击Next，进入下一题');
+						addLog('✅ กด Next ไปยังข้อถัดไป');
 						setTimeout(processCurrentPage, CONFIG.NEXT_LOAD_DELAY);
 					} else {
-						addLog('✅ 练习页无下一题，任务完成');
+						addLog('✅ ไม่มีข้อถัดไปแล้ว, งานเสร็จสมบูรณ์');
 						stopTask();
 					}
 				}
@@ -802,24 +726,20 @@
 	function startTask() {
 		if (isRunning) return;
 
-		// 启动前强制检测 + 初始化
 		detectPageType();
 		initExerciseComponent();
 
-		// 仅在视频 / 练习 / 结算 / 发音页面启动
 		if (['video', 'exercise', 'result', 'pronunciation'].indexOf(currentPageType) === -1) {
-			addLog('❌ 当前是主页/其他页面，无法启动');
+			addLog('❌ อยู่ในหน้าหลักหรือหน้าอื่น, ไม่สามารถเริ่มทำงานได้');
 			return;
 		}
 
-		// 启动任务
 		isRunning = true;
 		localStorage.setItem(STORAGE_KEY, 'true');
 		document.getElementById('startBtn').disabled = true;
 		document.getElementById('stopBtn').disabled = false;
-		addLog('===== 自动任务启动 =====');
+		addLog('===== เริ่มต้นทำงานอัตโนมัติ =====');
 
-		// 立即执行一次
 		processCurrentPage();
 	}
 
@@ -831,12 +751,10 @@
 		localStorage.removeItem(STORAGE_KEY);
 		document.getElementById('startBtn').disabled = false;
 		document.getElementById('stopBtn').disabled = true;
-		addLog('===== 自动任务停止 =====');
+		addLog('===== หยุดทำงานอัตโนมัติ =====');
 	}
 
-
 	// -------------------------- 7. 面板初始化 --------------------------
-	// 面板拖动限制
 	function makeDraggable(dragTarget, dragHandle) {
 		let isDragging = false;
 		let offsetX, offsetY;
@@ -861,7 +779,6 @@
 			let newX = e.clientX - offsetX;
 			let newY = e.clientY - offsetY;
 
-			// 边界限制
 			const windowWidth = window.innerWidth;
 			const windowHeight = window.innerHeight;
 			const panelWidth = dragTarget.offsetWidth;
@@ -880,7 +797,6 @@
 			isDragging = false;
 		}
 
-		// 防止内存泄漏
 		dragTarget.addEventListener('remove', () => {
 			dragHandle.removeEventListener('mousedown', startDrag);
 			document.removeEventListener('mousemove', drag);
@@ -888,9 +804,7 @@
 		});
 	}
 
-	// 面板初始化
 	function initPanel() {
-		// 创建面板
 		const panel = document.createElement('div');
 		panel.className = 'autospeexx-panel';
 		panel.innerHTML = `
@@ -901,102 +815,95 @@
 
             <!-- 分页 -->
             <div class="autospeexx-tabs">
-                <div class="autospeexx-tab active" data-tab="main">核心功能</div>
-                <div class="autospeexx-tab" data-tab="settings">参数配置</div>
+                <div class="autospeexx-tab active" data-tab="main">ฟังก์ชันหลัก</div>
+                <div class="autospeexx-tab" data-tab="settings">ตั้งค่า</div>
             </div>
 
             <div class="autospeexx-scroll-container">
                 <!-- 核心功能页 -->
                 <div class="autospeexx-tab-content active" id="mainTab">
-                    <button class="autospeexx-btn autospeexx-btn-start" id="startBtn">启动自动任务</button>
-                    <button class="autospeexx-btn autospeexx-btn-stop" id="stopBtn" disabled>停止自动任务</button>
-                    <div class="autospeexx-page-type">当前页面：unknown</div>
-                    <div class="autospeexx-tip">💡 支持视频自动播放 / 练习自动完成 / 发音自动跳过</div>
-                    <div class="autospeexx-tip">💡 出现问题请尝试手动返回后重新启动任务，或者刷新页面</div>
+                    <button class="autospeexx-btn autospeexx-btn-start" id="startBtn">เริ่มทำงานอัตโนมัติ</button>
+                    <button class="autospeexx-btn autospeexx-btn-stop" id="stopBtn" disabled>หยุดทำงานอัตโนมัติ</button>
+                    <div class="autospeexx-page-type">หน้าปัจจุบัน: unknown</div>
+                    <div class="autospeexx-tip">💡 รองรับเล่นวิดีโอออโต้ / ทำแบบฝึกหัดออโต้ / ข้ามฝึกออกเสียง</div>
+                    <div class="autospeexx-tip">💡 หากพบปัญหา ให้ลองกลับหน้าก่อนหน้าแล้วกดเริ่มใหม่ หรือรีเฟรชหน้าเว็บ</div>
                 </div>
 
-                <!-- 参数配置页（新增基本 / 高级配置分割） -->
+                <!-- 参数配置页 -->
                 <div class="autospeexx-tab-content" id="settingsTab">
-                    <!-- 基本配置 -->
-                    <div style="font-weight:bold; margin:10px 0; color:#ff7700 !important;">⚙️ 基本配置</div>
+                    <div style="font-weight:bold; margin:10px 0; color:#ff7700 !important;">⚙️ ตั้งค่าพื้นฐาน</div>
                     <div class="autospeexx-setting-item">
-                        <label class="autospeexx-setting-label">单题最短完成时间（ms）：</label>
+                        <label class="autospeexx-setting-label">เวลาขั้นต่ำต่อข้อ (ms):</label>
                         <input type="number" class="autospeexx-setting-input" id="minTotalTimeInput">
                     </div>
-                    <div class="autospeexx-tip">💡 至少设为 30 秒以避免学习时长异常</div>
+                    <div class="autospeexx-tip">💡 ควรกำหนดอย่างน้อย 30 วินาที เพื่อป้องกันชั่วโมงเรียนผิดปกติ</div>
                     <div class="autospeexx-setting-item">
-                        <label class="autospeexx-setting-label">在发音练习页面停留更久：</label>
+                        <label class="autospeexx-setting-label">พักในหน้าออกเสียงนานขึ้น:</label>
                         <input type="checkbox" id="pronWaitInput" style="transform: scale(1.2);">
                     </div>
-                    <div class="autospeexx-tip">💡 发音练习停留三倍时长（可避免出现 0 分钟学习时间）</div>
+                    <div class="autospeexx-tip">💡 พักในหน้าออกเสียง 3 เท่า (หลีกเลี่ยงเวลาเรียน 0 นาที)</div>
 
-                    <!-- 高级配置分割线 -->
                     <hr style="border:0; border-top:2px dashed #eee; margin:15px 0;">
                     <details class="autospeexx-advanced-settings">
                         <summary style="font-weight:bold; margin:10px 0; color:#dc3545 !important;">
-                            🔩 高级配置
+                            🔩 ตั้งค่าขั้นสูง
                         </summary>
-                        <div class="autospeexx-tip" style="color: red !important;">⚠️ 若非了解以下参数含义及改动影响，建议保持默认值</div>
-                        <!-- 高级配置项 -->
+                        <div class="autospeexx-tip" style="color: red !important;">⚠️ หากไม่เข้าใจผลกระทบ แนะนำให้ใช้ค่าเริ่มต้น</div>
                         <div class="autospeexx-setting-item">
-                            <label class="autospeexx-setting-label">显示答案延迟（ms）：</label>
+                            <label class="autospeexx-setting-label">หน่วงเวลาแสดงเฉลย (ms):</label>
                             <input type="number" class="autospeexx-setting-input" id="solveDelayInput">
                         </div>
-                        <div class="autospeexx-tip">💡 触发 Solution 后等待的时间</div>
+                        <div class="autospeexx-tip">💡 เวลารอก่อนกด Solution</div>
                         <div class="autospeexx-setting-item">
-                            <label class="autospeexx-setting-label">提交延迟（ms）：</label>
+                            <label class="autospeexx-setting-label">หน่วงเวลาส่งคำตอบ (ms):</label>
                             <input type="number" class="autospeexx-setting-input" id="submitDelayInput">
                         </div>
-                        <div class="autospeexx-tip">💡 调用 this.trigger("solve") 后延迟（模拟填入答案的耗时）</div>
+                        <div class="autospeexx-tip">💡 ดีเลย์หลังเรียกคำสั่งแก้โจทย์</div>
                         <div class="autospeexx-setting-item">
-                            <label class="autospeexx-setting-label">跨页加载预留延迟（ms）：</label>
+                            <label class="autospeexx-setting-label">หน่วงเวลาโหลดหน้าถัดไป (ms):</label>
                             <input type="number" class="autospeexx-setting-input" id="nextLoadDelayInput">
                         </div>
-                        <div class="autospeexx-tip">💡 触发 Next 后预留的加载时间</div>
+                        <div class="autospeexx-tip">💡 เวลารอสำรองหลังกด Next</div>
                         <div class="autospeexx-setting-item">
-                            <label class="autospeexx-setting-label">成绩检测延迟（ms）：</label>
+                            <label class="autospeexx-setting-label">หน่วงเวลาตรวจคะแนน (ms):</label>
                             <input type="number" class="autospeexx-setting-input" id="scoreCheckDelayInput">
                         </div>
-                        <div class="autospeexx-tip">💡 查询到 [class*="result-badge-container"] 后的延迟</div>
+                        <div class="autospeexx-tip">💡 ดีเลย์หลังจากพบผลลัพธ์คะแนน</div>
                         <div class="autospeexx-setting-item">
-                            <label class="autospeexx-setting-label">最大随机延迟（ms）：</label>
+                            <label class="autospeexx-setting-label">สุ่มหน่วงเวลาสูงสุด (ms):</label>
                             <input type="number" class="autospeexx-setting-input" id="maxRandomDelayInput">
                         </div>
-                        <div class="autospeexx-tip">💡 随机延迟范围：1000ms ~ 最大值（模拟人工操作的随机性）</div>
+                        <div class="autospeexx-tip">💡 ช่วงสุ่มดีเลย์: 1000ms ถึงค่าสูงสุด (จำลองความเหมือนมนุษย์)</div>
                     </details>
-                    <!-- 按钮区域 -->
                     <div style="margin-top:15px;">
-                        <button class="autospeexx-btn autospeexx-btn-save" id="saveConfigBtn" style="width: auto;">保存配置</button>
-                        <button class="autospeexx-btn autospeexx-btn-reset" id="resetConfigBtn" style="width: auto;">重置为默认</button>
+                        <button class="autospeexx-btn autospeexx-btn-save" id="saveConfigBtn" style="width: auto;">บันทึก</button>
+                        <button class="autospeexx-btn autospeexx-btn-reset" id="resetConfigBtn" style="width: auto;">ค่าเริ่มต้น</button>
                     </div>
                 </div>
             </div>
 
-            <div class="autospeexx-log">=== 日志显示 ===</div>
+            <div class="autospeexx-log">=== ประวัติการทำงาน ===</div>
         `;
 
-		document.body.appendChild(panel); // 似乎导致 Console 报错但不影响运行
+		document.body.appendChild(panel);
 
-		// 悬浮球（左下角）
 		const floatBall = document.createElement('div');
 		floatBall.className = 'autospeexx-float-ball';
 		document.body.appendChild(floatBall);
 
-		// 最小化 / 恢复
 		panel.querySelector('.autospeexx-min-btn').addEventListener('click', () => {
 			isMinimized = true;
 			panel.classList.add('minimized');
 			floatBall.style.display = 'flex';
-			addLog('🔽 面板已最小化至左下角');
+			addLog('🔽 ย่อแผงควบคุมลงมุมซ้ายล่างแล้ว');
 		});
 		floatBall.addEventListener('click', () => {
 			isMinimized = false;
 			panel.classList.remove('minimized');
 			floatBall.style.display = 'none';
-			addLog('🔼 面板已恢复');
+			addLog('🔼 แสดงแผงควบคุมขึ้นมาแล้ว');
 		});
 
-		// 分页切换
 		const tabs = panel.querySelectorAll('.autospeexx-tab');
 		const tabContents = panel.querySelectorAll('.autospeexx-tab-content');
 		tabs.forEach(tab => {
@@ -1009,35 +916,27 @@
 			});
 		});
 
-		// 绑定事件
 		document.getElementById('startBtn').addEventListener('click', startTask);
 		document.getElementById('stopBtn').addEventListener('click', stopTask);
 		document.getElementById('saveConfigBtn').addEventListener('click', saveConfig);
 		document.getElementById('resetConfigBtn').addEventListener('click', resetConfig);
 
-		// 限制拖动
 		makeDraggable(panel, panel.querySelector('.autospeexx-header'));
 
-		// 加载配置
 		loadConfig();
-
-		// 启动前强制检测页面类型 + 初始化组件
 		detectPageType();
 		initExerciseComponent();
 
-		// 续跑恢复
 		if (localStorage.getItem(STORAGE_KEY) === 'true') {
 			startTask();
 		}
 
-		// 延迟检测页面类型（针对低网速 / 主页加载的情况）
 		setTimeout(() => {
-			detectPageType(); // 延迟后重新检测，网速正常的情况下此时主页元素已加载完成
-			addLog('🔍 复检测页面类型');
-		}, 1500); // 1.5 秒延迟
+			detectPageType();
+			addLog('🔍 ตรวจสอบชนิดของหน้าซ้ำอีกครั้ง');
+		}, 1500);
 	}
 
-	// -------------------------- 8. 初始化 --------------------------
 	function waitForDOMReady() {
 		if (document.readyState === 'complete' || document.readyState === 'interactive') {
 			initPanel();
